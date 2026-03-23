@@ -3,7 +3,207 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Attendance – Per Person Lookup</title>
+<title>Attendance System – Secure Login</title>
+<link href="https://fonts.googleapis.com/css2?family=Playfair+Display:wght@600;700&family=DM+Sans:wght@300;400;500&display=swap" rel="stylesheet">
+<style>
+
+/* ── LOGIN PAGE ─────────────────────────────────────── */
+#loginPage {
+  position: fixed; inset: 0; z-index: 9999;
+  display: flex; align-items: center; justify-content: center;
+  background: #0a0f1e;
+  overflow: hidden;
+}
+
+/* animated mesh background */
+#loginPage::before {
+  content: '';
+  position: absolute; inset: 0;
+  background:
+    radial-gradient(ellipse 80% 60% at 20% 30%, rgba(46,117,182,0.25) 0%, transparent 60%),
+    radial-gradient(ellipse 60% 50% at 80% 70%, rgba(31,56,100,0.4) 0%, transparent 60%),
+    radial-gradient(ellipse 40% 40% at 60% 20%, rgba(100,160,220,0.1) 0%, transparent 50%);
+  animation: bgShift 8s ease-in-out infinite alternate;
+}
+@keyframes bgShift {
+  from { opacity: 0.8; transform: scale(1); }
+  to   { opacity: 1;   transform: scale(1.04); }
+}
+
+/* grid overlay */
+#loginPage::after {
+  content: '';
+  position: absolute; inset: 0;
+  background-image:
+    linear-gradient(rgba(46,117,182,0.07) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(46,117,182,0.07) 1px, transparent 1px);
+  background-size: 40px 40px;
+  pointer-events: none;
+}
+
+.login-card {
+  position: relative; z-index: 1;
+  background: rgba(255,255,255,0.04);
+  backdrop-filter: blur(24px);
+  border: 1px solid rgba(255,255,255,0.1);
+  border-radius: 20px;
+  padding: 50px 44px 42px;
+  width: 420px;
+  max-width: calc(100vw - 40px);
+  box-shadow:
+    0 0 0 1px rgba(46,117,182,0.2),
+    0 30px 80px rgba(0,0,0,0.5),
+    inset 0 1px 0 rgba(255,255,255,0.08);
+  animation: cardIn 0.7s cubic-bezier(0.16,1,0.3,1) both;
+}
+@keyframes cardIn {
+  from { opacity: 0; transform: translateY(30px) scale(0.97); }
+  to   { opacity: 1; transform: translateY(0) scale(1); }
+}
+
+.login-logo {
+  text-align: center;
+  margin-bottom: 32px;
+}
+.login-logo .icon-ring {
+  width: 64px; height: 64px;
+  border-radius: 50%;
+  background: linear-gradient(135deg, #2E75B6, #1F3864);
+  display: inline-flex; align-items: center; justify-content: center;
+  font-size: 1.8rem;
+  box-shadow: 0 8px 32px rgba(46,117,182,0.4);
+  margin-bottom: 16px;
+  animation: pulse 3s ease-in-out infinite;
+}
+@keyframes pulse {
+  0%,100% { box-shadow: 0 8px 32px rgba(46,117,182,0.4); }
+  50%      { box-shadow: 0 8px 48px rgba(46,117,182,0.7); }
+}
+.login-logo h1 {
+  font-family: 'Playfair Display', serif;
+  color: #fff;
+  font-size: 1.55rem;
+  letter-spacing: 0.02em;
+  line-height: 1.2;
+}
+.login-logo p {
+  font-family: 'DM Sans', sans-serif;
+  color: rgba(255,255,255,0.45);
+  font-size: 0.8rem;
+  margin-top: 5px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.login-field {
+  margin-bottom: 18px;
+}
+.login-field label {
+  display: block;
+  font-family: 'DM Sans', sans-serif;
+  font-size: 0.75rem;
+  font-weight: 500;
+  color: rgba(255,255,255,0.5);
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  margin-bottom: 8px;
+}
+.login-field input {
+  width: 100%;
+  background: rgba(255,255,255,0.06);
+  border: 1px solid rgba(255,255,255,0.12);
+  border-radius: 10px;
+  padding: 13px 16px;
+  color: #fff;
+  font-family: 'DM Sans', sans-serif;
+  font-size: 0.95rem;
+  outline: none;
+  transition: border-color 0.2s, background 0.2s, box-shadow 0.2s;
+}
+.login-field input::placeholder { color: rgba(255,255,255,0.25); }
+.login-field input:focus {
+  border-color: rgba(46,117,182,0.7);
+  background: rgba(46,117,182,0.08);
+  box-shadow: 0 0 0 3px rgba(46,117,182,0.15);
+}
+
+#loginError {
+  display: none;
+  background: rgba(220,50,50,0.15);
+  border: 1px solid rgba(220,50,50,0.35);
+  border-radius: 8px;
+  color: #ff8080;
+  font-family: 'DM Sans', sans-serif;
+  font-size: 0.83rem;
+  padding: 10px 14px;
+  margin-bottom: 16px;
+  text-align: center;
+  animation: shake 0.4s ease;
+}
+@keyframes shake {
+  0%,100% { transform: translateX(0); }
+  20%      { transform: translateX(-6px); }
+  40%      { transform: translateX(6px); }
+  60%      { transform: translateX(-4px); }
+  80%      { transform: translateX(4px); }
+}
+
+#loginBtn {
+  width: 100%;
+  background: linear-gradient(135deg, #2E75B6 0%, #1a5a9a 100%);
+  color: #fff;
+  border: none;
+  border-radius: 10px;
+  padding: 14px;
+  font-family: 'DM Sans', sans-serif;
+  font-size: 0.95rem;
+  font-weight: 500;
+  letter-spacing: 0.04em;
+  cursor: pointer;
+  transition: transform 0.15s, box-shadow 0.2s, filter 0.2s;
+  box-shadow: 0 6px 24px rgba(46,117,182,0.35);
+  margin-top: 4px;
+}
+#loginBtn:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 10px 32px rgba(46,117,182,0.5);
+  filter: brightness(1.08);
+}
+#loginBtn:active { transform: translateY(1px); }
+#loginBtn.loading { opacity: 0.7; pointer-events: none; }
+
+.login-footer {
+  text-align: center;
+  margin-top: 24px;
+  font-family: 'DM Sans', sans-serif;
+  font-size: 0.75rem;
+  color: rgba(255,255,255,0.2);
+  letter-spacing: 0.05em;
+}
+.login-footer span { color: rgba(46,117,182,0.6); }
+
+/* logout button (shown after login) */
+#logoutBtn {
+  background: rgba(255,255,255,0.12);
+  border: 1px solid rgba(255,255,255,0.2);
+  color: white;
+  border-radius: 8px;
+  padding: 6px 14px;
+  font-size: 0.82rem;
+  cursor: pointer;
+  font-family: Arial, sans-serif;
+  transition: background 0.2s;
+}
+#logoutBtn:hover { background: rgba(255,80,80,0.3); border-color: rgba(255,80,80,0.5); }
+
+/* dashboard hidden by default */
+#dashboardPage { display: none; }
+
+/* fade-in for dashboard */
+.fade-in { animation: fadeIn 0.5s ease both; }
+@keyframes fadeIn { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: translateY(0); } }
+
+</style>
 <style>
   * { box-sizing: border-box; margin: 0; padding: 0; }
   body { font-family: Arial, sans-serif; background: #f0f4f8; color: #1a1a2e; }
@@ -194,11 +394,37 @@
 </head>
 <body>
 
+<!-- ═══════════════════ LOGIN PAGE ═══════════════════ -->
+<div id="loginPage">
+  <div class="login-card">
+    <div class="login-logo">
+      <div class="icon-ring">🔐</div>
+      <h1>Attendance Portal</h1>
+      <p>Confidential &nbsp;·&nbsp; Authorised Access Only</p>
+    </div>
+    <div class="login-field">
+      <label>Username</label>
+      <input type="text" id="usernameInput" placeholder="Enter username" autocomplete="username">
+    </div>
+    <div class="login-field">
+      <label>Password</label>
+      <input type="password" id="passwordInput" placeholder="Enter password" autocomplete="current-password">
+    </div>
+    <div id="loginError">⚠️ Invalid username or password. Please try again.</div>
+    <button id="loginBtn" onclick="doLogin()">Sign In →</button>
+    <div class="login-footer">Protected by &nbsp;<span>Attendance System v1.0</span></div>
+  </div>
+</div>
+
+<!-- ═══════════════════ DASHBOARD PAGE ═══════════════════ -->
+<div id="dashboardPage">
+
 <div class="header">
   <div>
     <div class="h1" style="font-size:1.5rem;font-weight:bold;">📋 Per Person Attendance Lookup</div>
     <div class="sub">Apr – Dec 2025 · 471 students · 2,968 total visits</div>
   </div>
+  <button id="logoutBtn" onclick="doLogout()">🔓 Logout</button>
 </div>
 
 <div class="search-section">
@@ -387,6 +613,80 @@ function showPerson(trno) {
       </div>
     </div>`;
 }
+</script>
+
+</div><!-- end #dashboardPage -->
+
+<script>
+// ── Login / Logout Logic ──────────────────────────────
+const CREDENTIALS = { username: 'admin', password: 'ASDFGHJKL' };
+
+function doLogin() {
+  const u = document.getElementById('usernameInput').value.trim();
+  const p = document.getElementById('passwordInput').value;
+  const errEl = document.getElementById('loginError');
+  const btn = document.getElementById('loginBtn');
+
+  btn.classList.add('loading');
+  btn.textContent = 'Signing in…';
+
+  setTimeout(() => {
+    if (u === CREDENTIALS.username && p === CREDENTIALS.password) {
+      errEl.style.display = 'none';
+      // Fade out login, show dashboard
+      const lp = document.getElementById('loginPage');
+      lp.style.transition = 'opacity 0.5s ease, transform 0.5s ease';
+      lp.style.opacity = '0';
+      lp.style.transform = 'scale(1.04)';
+      setTimeout(() => {
+        lp.style.display = 'none';
+        const dp = document.getElementById('dashboardPage');
+        dp.style.display = 'block';
+        dp.classList.add('fade-in');
+      }, 500);
+    } else {
+      errEl.style.display = 'block';
+      // re-trigger shake
+      errEl.style.animation = 'none';
+      void errEl.offsetWidth;
+      errEl.style.animation = 'shake 0.4s ease';
+      btn.classList.remove('loading');
+      btn.textContent = 'Sign In →';
+      document.getElementById('passwordInput').value = '';
+      document.getElementById('passwordInput').focus();
+    }
+  }, 600);
+}
+
+function doLogout() {
+  const dp = document.getElementById('dashboardPage');
+  dp.style.transition = 'opacity 0.3s ease';
+  dp.style.opacity = '0';
+  setTimeout(() => {
+    dp.style.display = 'none';
+    dp.style.opacity = '1';
+    const lp = document.getElementById('loginPage');
+    lp.style.display = 'flex';
+    lp.style.opacity = '0';
+    lp.style.transform = 'scale(0.97)';
+    lp.style.transition = 'opacity 0.4s ease, transform 0.4s ease';
+    document.getElementById('usernameInput').value = '';
+    document.getElementById('passwordInput').value = '';
+    document.getElementById('loginError').style.display = 'none';
+    document.getElementById('loginBtn').textContent = 'Sign In →';
+    void lp.offsetWidth;
+    lp.style.opacity = '1';
+    lp.style.transform = 'scale(1)';
+  }, 300);
+}
+
+// Allow Enter key on login fields
+document.getElementById('passwordInput').addEventListener('keydown', e => {
+  if (e.key === 'Enter') doLogin();
+});
+document.getElementById('usernameInput').addEventListener('keydown', e => {
+  if (e.key === 'Enter') document.getElementById('passwordInput').focus();
+});
 </script>
 </body>
 </html>
