@@ -611,7 +611,7 @@
       <input type="password" id="passwordInput" placeholder="Enter password" autocomplete="current-password">
     </div>
     <div id="loginError">⚠️ Invalid username or password. Please try again.</div>
-    <button id="loginBtn" onclick="doLogin()">Sign In →</button>
+    <button id="loginBtn" onclick="safeCall(doLogin)">Sign In →</button>
     <div class="login-footer">Protected by &nbsp;<span>Attendance System v1.0</span></div>
   </div>
 </div>
@@ -626,8 +626,8 @@
   </div>
   <div style="display:flex;align-items:center;gap:10px;">
     <span id="roleBadge" class="role-badge"></span>
-    <button id="adminPanelBtn" onclick="showAdminPanel()" style="display:none;background:rgba(255,215,0,0.15);border:1px solid rgba(255,215,0,0.3);color:#ffd700;border-radius:8px;padding:6px 14px;font-size:0.82rem;cursor:pointer;">⚙️ Admin Panel</button>
-    <button id="logoutBtn" onclick="doLogout()">🔓 Logout</button>
+    <button id="adminPanelBtn" onclick="safeCall(showAdminPanel)" style="display:none;background:rgba(255,215,0,0.15);border:1px solid rgba(255,215,0,0.3);color:#ffd700;border-radius:8px;padding:6px 14px;font-size:0.82rem;cursor:pointer;">⚙️ Admin Panel</button>
+    <button id="logoutBtn" onclick="safeCall(doLogout)">🔓 Logout</button>
   </div>
 </div>
 
@@ -1234,16 +1234,22 @@ function applyRoleUI(role) {
 }
 
 function showAdminPanel() {
-  if (currentRole !== 'admin') return;
+  if (currentRole !== 'admin') {
+    alert('Access denied. Admin only.');
+    return;
+  }
   document.getElementById('dashboardPage').style.display = 'none';
   const ap = document.getElementById('adminPanel');
   ap.style.display = 'block';
   ap.classList.add('fade-in');
+  setTimeout(refreshPhotoCoverage, 150);
 }
 
 function hideAdminPanel() {
-  document.getElementById('adminPanel').style.display = 'none';
-  document.getElementById('dashboardPage').style.display = 'block';
+  const ap = document.getElementById('adminPanel');
+  const dp = document.getElementById('dashboardPage');
+  if (ap) ap.style.display = 'none';
+  if (dp) dp.style.display = 'block';
 }
 
 function doLogout() {
@@ -1269,6 +1275,12 @@ function doLogout() {
 }
 
 // ── Admin Panel Functions ──────────────────────────────
+// Safety wrapper - catches silent errors on GitHub Pages
+function safeCall(fn, ...args) {
+  try { return fn(...args); } 
+  catch(e) { console.error('Admin function error:', e); alert('Error: ' + e.message); }
+}
+
 function changeAdminPassword() {
   const cur = document.getElementById('adminCurrentPwd').value;
   const nw  = document.getElementById('adminNewPwd').value;
@@ -1331,11 +1343,19 @@ function exportLeaderboardCSV() {
 }
 
 function downloadFile(filename, content, type) {
-  const blob = new Blob([content], { type });
-  const a = document.createElement('a');
-  a.href = URL.createObjectURL(blob);
-  a.download = filename;
-  a.click();
+  try {
+    const blob = new Blob([content], { type });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = filename;
+    a.style.display = 'none';
+    document.body.appendChild(a);
+    a.click();
+    setTimeout(() => { document.body.removeChild(a); URL.revokeObjectURL(url); }, 200);
+  } catch(e) {
+    alert('Download failed: ' + e.message);
+  }
 }
 
 
@@ -1631,12 +1651,7 @@ document.getElementById('usernameInput').addEventListener('keydown', e => {
   if (e.key === 'Enter') document.getElementById('passwordInput').focus();
 });
 
-// Initialize photo coverage on admin panel open
-const _origShowAdmin = showAdminPanel;
-function showAdminPanel() {
-  _origShowAdmin();
-  setTimeout(refreshPhotoCoverage, 100);
-}
+// Photo coverage refresh is now handled inside showAdminPanel directly
 </script>
 
 </div><!-- end #dashboardPage -->
@@ -1650,8 +1665,8 @@ function showAdminPanel() {
     </div>
     <div style="display:flex;align-items:center;gap:10px;">
       <span class="role-badge role-admin">👑 Admin</span>
-      <button onclick="hideAdminPanel()" style="background:rgba(255,255,255,0.12);border:1px solid rgba(255,255,255,0.2);color:white;border-radius:8px;padding:6px 14px;font-size:0.82rem;cursor:pointer;">← Back to Dashboard</button>
-      <button id="logoutBtn2" onclick="doLogout()" style="background:rgba(255,80,80,0.2);border:1px solid rgba(255,80,80,0.3);color:#ff9999;border-radius:8px;padding:6px 14px;font-size:0.82rem;cursor:pointer;">🔓 Logout</button>
+      <button onclick="safeCall(hideAdminPanel)" style="background:rgba(255,255,255,0.12);border:1px solid rgba(255,255,255,0.2);color:white;border-radius:8px;padding:6px 14px;font-size:0.82rem;cursor:pointer;">← Back to Dashboard</button>
+      <button id="logoutBtn2" onclick="safeCall(doLogout)" style="background:rgba(255,80,80,0.2);border:1px solid rgba(255,80,80,0.3);color:#ff9999;border-radius:8px;padding:6px 14px;font-size:0.82rem;cursor:pointer;">🔓 Logout</button>
     </div>
   </div>
 
@@ -1673,7 +1688,7 @@ function showAdminPanel() {
           <label>Confirm New Password</label>
           <input type="password" id="adminConfirmPwd" placeholder="Confirm new password">
         </div>
-        <button class="admin-btn" onclick="changeAdminPassword()">Update Admin Password</button>
+        <button class="admin-btn" onclick="safeCall(changeAdminPassword)">Update Admin Password</button>
         <div class="admin-success" id="adminPwdSuccess">✅ Admin password updated successfully!</div>
         <div class="admin-error" id="adminPwdError"></div>
       </div>
@@ -1691,7 +1706,7 @@ function showAdminPanel() {
           <label>Confirm New Password</label>
           <input type="password" id="mgmtConfirmPwd" placeholder="Confirm new password">
         </div>
-        <button class="admin-btn" onclick="changeMgmtPassword()">Update Management Password</button>
+        <button class="admin-btn" onclick="safeCall(changeMgmtPassword)">Update Management Password</button>
         <div class="admin-success" id="mgmtPwdSuccess">✅ Management password updated successfully!</div>
         <div class="admin-error" id="mgmtPwdError"></div>
       </div>
@@ -1701,8 +1716,8 @@ function showAdminPanel() {
     <div class="admin-card">
       <div class="admin-card-header">📥 Export Data</div>
       <div class="admin-card-body" style="display:flex;gap:12px;flex-wrap:wrap;">
-        <button class="admin-btn" onclick="exportCSV()">📊 Export Attendance CSV</button>
-        <button class="admin-btn" onclick="exportLeaderboardCSV()">🏆 Export Leaderboard CSV</button>
+        <button class="admin-btn" onclick="safeCall(exportCSV)">📊 Export Attendance CSV</button>
+        <button class="admin-btn" onclick="safeCall(exportLeaderboardCSV)">🏆 Export Leaderboard CSV</button>
       </div>
     </div>
 
