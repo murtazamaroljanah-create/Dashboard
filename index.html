@@ -643,6 +643,7 @@
 <div class="tab-bar">
   <button class="tab-btn active" id="tab-btn-lookup" onclick="switchTab('lookup')">🔍 Per Person Lookup</button>
   <button class="tab-btn" id="tab-btn-leaderboard" onclick="switchTab('leaderboard')">🏆 Leaderboard</button>
+  <button class="tab-btn" id="tab-btn-nfc" onclick="switchTab('nfc')" style="display:none;">📡 NFC Scanner</button>
 </div>
 
 <!-- TAB: LOOKUP -->
@@ -670,6 +671,59 @@
 <div id="tab-leaderboard" style="display:none;">
 <div id="lb-content"></div>
 </div><!-- end tab-leaderboard -->
+
+<!-- TAB: NFC SCANNER (Admin only) -->
+<div id="tab-nfc" style="display:none;">
+<div class="nfc-container">
+
+  <div class="nfc-scanner-card">
+    <!-- Scan Area -->
+    <div class="nfc-scan-area">
+      <div class="nfc-ring" id="nfcRing">📡</div>
+      <div class="nfc-scan-title" id="nfcTitle">NFC Attendance Scanner</div>
+      <div class="nfc-scan-sub" id="nfcSub">Press start then hold student card to phone</div>
+      <button id="nfcStartBtn" onclick="safeCall(startNFCScan)">📡 Start Scanner</button>
+      <div class="nfc-not-supported" id="nfcNotSupported">
+        ❌ <b>Web NFC not supported.</b> Please use <b>Chrome on Android (v89+)</b> and make sure NFC is ON in phone settings. Also ensure the page is opened via <b>https://</b>
+      </div>
+    </div>
+
+    <!-- Student Flash -->
+    <div class="student-flash" id="studentFlash"></div>
+
+    <!-- Stats -->
+    <div class="nfc-stats">
+      <div class="nfc-stat">
+        <div class="nfc-stat-val" id="statTotal">0</div>
+        <div class="nfc-stat-label">Today's Scans</div>
+      </div>
+      <div class="nfc-stat">
+        <div class="nfc-stat-val" id="statIn" style="color:#48bb78;">0</div>
+        <div class="nfc-stat-label">Checked In</div>
+      </div>
+      <div class="nfc-stat">
+        <div class="nfc-stat-val" id="statOut" style="color:#fc8181;">0</div>
+        <div class="nfc-stat-label">Checked Out</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Today's Log -->
+  <div class="nfc-scanner-card">
+    <div class="nfc-log">
+      <div class="nfc-log-title">
+        <span>📋 Today's Attendance Log</span>
+        <span id="logDate" style="font-weight:normal;color:#888;"></span>
+      </div>
+      <div id="nfcLogBody">
+        <div class="nfc-empty">No scans yet today. Start the scanner and tap a card!</div>
+      </div>
+    </div>
+  </div>
+
+</div>
+</div><!-- end tab-nfc -->
+
 
 <script>
 const DATA = 
@@ -867,11 +921,14 @@ let lbMode = 'weekly'; // 'weekly' or 'monthly'
 let lbPeriod = LB.weeks[LB.weeks.length - 1]; // default last week
 
 function switchTab(tab) {
-  document.getElementById('tab-lookup').style.display = tab === 'lookup' ? 'block' : 'none';
-  document.getElementById('tab-leaderboard').style.display = tab === 'leaderboard' ? 'block' : 'none';
-  document.getElementById('tab-btn-lookup').classList.toggle('active', tab === 'lookup');
-  document.getElementById('tab-btn-leaderboard').classList.toggle('active', tab === 'leaderboard');
+  ['lookup','leaderboard','nfc'].forEach(t => {
+    const el = document.getElementById('tab-' + t);
+    const btn = document.getElementById('tab-btn-' + t);
+    if (el) el.style.display = t === tab ? 'block' : 'none';
+    if (btn) btn.classList.toggle('active', t === tab);
+  });
   if (tab === 'leaderboard') renderLeaderboard();
+  if (tab === 'nfc') initNFCTab();
 }
 
 function setLbMode(mode) {
@@ -1157,6 +1214,282 @@ document.addEventListener('DOMContentLoaded', () => {
 });
 
 
+
+// ── NFC SCANNER LOGIC ──────────────────────────────────
+let nfcReader = null;
+let nfcActive = false;
+let todayLog = []; // { trno, name, action, time, timestamp }
+let activeScans = {}; // trno -> { time_in, timestamp }
+
+function initNFCTab() {
+  document.getElementById('logDate').textContent = new Date().toLocaleDateString('en-IN', { weekday:'long', day:'numeric', month:'long' });
+  renderNFCLog();
+  updateNFCStats();
+  if (!('NDEFReader' in window)) {
+    document.getElementById('nfcNotSupported').style.display = 'block';
+    document.getElementById('nfcStartBtn').disabled = true;
+    document.getElementById('nfcStartBtn').textContent = '❌ NFC Not Supported';
+    setNFCRing('error', '❌');
+  }
+}
+
+async function startNFCScan() {
+  if (!('NDEFReader' in window)) {
+    document.getElementById('nfcNotSupported').style.display = 'block';
+    return;
+  }
+
+  if (nfcActive) {
+    // Stop scanning
+    nfcActive = false;
+    nfcReader = null;
+    document.getElementById('nfcStartBtn').textContent = '📡 Start Scanner';
+    document.getElementById('nfcStartBtn').classList.remove('active-scan');
+    setNFCRing('', '📡');
+    setNFCStatus('Scanner stopped', 'Tap Start to begin scanning');
+    return;
+  }
+
+  try {
+    nfcReader = new NDEFReader();
+    await nfcReader.scan();
+    nfcActive = true;
+
+    document.getElementById('nfcStartBtn').textContent = '⏹ Stop Scanner';
+    document.getElementById('nfcStartBtn').classList.add('active-scan');
+    setNFCRing('waiting', '📡');
+    setNFCStatus('Scanner Active', 'Hold student NFC card to the back of the phone');
+
+    nfcReader.onreading = (event) => handleNFCRead(event);
+    nfcReader.onerror = (event) => {
+      setNFCRing('error', '⚠️');
+      setNFCStatus('Scan Error', 'Try again');
+      setTimeout(() => { if (nfcActive) { setNFCRing('waiting', '📡'); setNFCStatus('Scanner Active', 'Hold student NFC card to phone'); }}, 2000);
+    };
+
+  } catch(err) {
+    nfcActive = false;
+    if (err.name === 'NotAllowedError') {
+      setNFCStatus('Permission Denied', 'Please allow NFC permission');
+    } else {
+      setNFCStatus('Error', err.message);
+    }
+    setNFCRing('error', '❌');
+    document.getElementById('nfcStartBtn').textContent = '📡 Start Scanner';
+    document.getElementById('nfcStartBtn').classList.remove('active-scan');
+  }
+}
+
+function handleNFCRead(event) {
+  // Extract TR.NO from card
+  let trno = null;
+
+  // Try serial number first
+  if (event.serialNumber) {
+    const serial = event.serialNumber.replace(/:/g, '').toUpperCase();
+    // Check if serial matches any TRNO
+    const matchBySerial = persons.find(p => p.trno === serial);
+    if (matchBySerial) trno = serial;
+  }
+
+  // Try NDEF records
+  if (!trno && event.message && event.message.records) {
+    for (const record of event.message.records) {
+      try {
+        let text = '';
+        if (record.recordType === 'text') {
+          text = new TextDecoder(record.encoding || 'utf-8').decode(record.data).trim();
+        } else if (record.recordType === 'url') {
+          text = new TextDecoder().decode(record.data).trim();
+          const numMatch = text.match(/\d{4,6}/);
+          if (numMatch) text = numMatch[0];
+        } else {
+          text = new TextDecoder().decode(record.data).trim();
+        }
+        // Check if numeric and matches a person
+        if (/^\d{4,6}$/.test(text)) {
+          const match = persons.find(p => p.trno === text);
+          if (match) { trno = text; break; }
+          // Even if not in persons list, use as TRNO
+          trno = text; break;
+        }
+      } catch(e) {}
+    }
+  }
+
+  // If still no match, use serial as identifier
+  if (!trno && event.serialNumber) {
+    trno = event.serialNumber.replace(/:/g, '');
+  }
+
+  if (!trno) {
+    setNFCRing('error', '❓');
+    setNFCStatus('Unknown Card', 'Could not identify student');
+    setTimeout(() => { if (nfcActive) { setNFCRing('waiting', '📡'); setNFCStatus('Scanner Active', 'Hold student NFC card to phone'); }}, 2000);
+    return;
+  }
+
+  // Find student info
+  const person = persons.find(p => p.trno === trno);
+  const photoInfo = PHOTOS[trno];
+  const now = new Date();
+  const timeStr = now.toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', hour12: true });
+
+  // Determine check-in or check-out
+  let action, ringClass, ringEmoji;
+  if (activeScans[trno]) {
+    // Already checked in → check out
+    action = 'out';
+    ringClass = 'checkedout';
+    ringEmoji = '✅';
+    
+    const inTime = activeScans[trno].time;
+    const diffMs = now - activeScans[trno].timestamp;
+    const diffMins = Math.round(diffMs / 60000);
+    const durationStr = diffMins >= 60
+      ? `${Math.floor(diffMins/60)}h ${diffMins%60}m`
+      : `${diffMins} min`;
+
+    todayLog.unshift({ trno, name: person ? person.name : trno, action: 'OUT', timeIn: inTime, timeOut: timeStr, duration: durationStr, photoInfo });
+    delete activeScans[trno];
+
+    // Save to Supabase
+    saveAttendanceToDB(trno, person, inTime, timeStr, diffMins * 60);
+
+  } else {
+    // First scan → check in
+    action = 'in';
+    ringClass = 'success';
+    ringEmoji = '👋';
+    activeScans[trno] = { time: timeStr, timestamp: now };
+    todayLog.unshift({ trno, name: person ? person.name : trno, action: 'IN', timeIn: timeStr, timeOut: '—', duration: '—', photoInfo });
+  }
+
+  // Flash the student card
+  showStudentFlash(trno, person, photoInfo, action, timeStr, activeScans[trno] ? null : todayLog[0].duration);
+  setNFCRing(ringClass, ringEmoji);
+  setNFCStatus(
+    action === 'in' ? `✅ Checked In: ${person ? person.name.split(' ')[0] : trno}` : `👋 Checked Out: ${person ? person.name.split(' ')[0] : trno}`,
+    action === 'in' ? `Time In: ${timeStr}` : `Duration: ${todayLog[0].duration}`
+  );
+
+  // Reset ring after 3 seconds
+  setTimeout(() => {
+    if (nfcActive) {
+      setNFCRing('waiting', '📡');
+      setNFCStatus('Scanner Active', 'Hold student NFC card to phone');
+    }
+  }, 3000);
+
+  renderNFCLog();
+  updateNFCStats();
+}
+
+function showStudentFlash(trno, person, photoInfo, action, time, duration) {
+  const flashEl = document.getElementById('studentFlash');
+  flashEl.style.display = 'block';
+
+  const photoHtml = photoInfo
+    ? `<img class="flash-photo" src="data:image/jpeg;base64,${photoInfo.photo}" alt="">`
+    : `<div class="flash-photo-placeholder">${(person ? person.name : trno).charAt(0)}</div>`;
+
+  const cls = action === 'in' ? 'flash-checkin' : 'flash-checkout';
+  const actionLabel = action === 'in' ? '🟢 CHECKED IN' : '🔴 CHECKED OUT';
+  const stdInfo = photoInfo ? photoInfo.std : '';
+
+  flashEl.innerHTML = `
+    <div class="student-flash-inner ${cls}">
+      ${photoHtml}
+      <div class="flash-info">
+        <div class="flash-action">${actionLabel}</div>
+        <div class="flash-name">${person ? person.name : 'Unknown (' + trno + ')'}</div>
+        <div class="flash-trno">TR.NO: ${trno}</div>
+        <div class="flash-time">⏰ ${time}</div>
+        ${stdInfo ? `<div class="flash-std">📚 ${stdInfo}</div>` : ''}
+        ${duration ? `<div class="flash-time">⏱ Duration: ${duration}</div>` : ''}
+      </div>
+    </div>`;
+}
+
+function renderNFCLog() {
+  const body = document.getElementById('nfcLogBody');
+  if (!todayLog.length) {
+    body.innerHTML = '<div class="nfc-empty">No scans yet today. Start the scanner and tap a card!</div>';
+    return;
+  }
+  body.innerHTML = `
+    <table class="nfc-log-table">
+      <thead><tr>
+        <th>Student</th>
+        <th>TR.NO</th>
+        <th>Time In</th>
+        <th>Time Out</th>
+        <th>Duration</th>
+        <th>Status</th>
+      </tr></thead>
+      <tbody>
+        ${todayLog.map(entry => `
+          <tr>
+            <td>${entry.name.split(' ').slice(0,2).join(' ')}</td>
+            <td>${entry.trno}</td>
+            <td>${entry.timeIn}</td>
+            <td>${entry.timeOut}</td>
+            <td>${entry.duration}</td>
+            <td><span class="badge-${entry.action === 'IN' ? 'in' : 'out'}">${entry.action}</span></td>
+          </tr>`).join('')}
+      </tbody>
+    </table>`;
+}
+
+function updateNFCStats() {
+  const total = todayLog.length;
+  const outs = todayLog.filter(e => e.action === 'OUT').length;
+  const ins = Object.keys(activeScans).length;
+  document.getElementById('statTotal').textContent = total;
+  document.getElementById('statIn').textContent = ins;
+  document.getElementById('statOut').textContent = outs;
+}
+
+async function saveAttendanceToDB(trno, person, timeIn, timeOut, seconds) {
+  if (!dbConnected) return;
+  try {
+    const today = new Date().toISOString().split('T')[0];
+    await fetch(`${SUPABASE_URL}/rest/v1/attendance`, {
+      method: 'POST',
+      headers: {
+        'apikey': SUPABASE_ANON_KEY,
+        'Authorization': `Bearer ${SUPABASE_ANON_KEY}`,
+        'Content-Type': 'application/json',
+        'Prefer': 'return=minimal'
+      },
+      body: JSON.stringify({
+        date: today,
+        trno: trno,
+        name: person ? person.name : trno,
+        time_in: timeIn,
+        time_out: timeOut,
+        purpose: 'NFC Entry',
+        seconds: seconds
+      })
+    });
+  } catch(e) { console.warn('Could not save to DB:', e); }
+}
+
+function setNFCRing(state, emoji) {
+  const ring = document.getElementById('nfcRing');
+  if (!ring) return;
+  ring.className = 'nfc-ring' + (state ? ' ' + state : '');
+  ring.textContent = emoji;
+}
+
+function setNFCStatus(title, sub) {
+  const t = document.getElementById('nfcTitle');
+  const s = document.getElementById('nfcSub');
+  if (t) t.textContent = title;
+  if (s) s.textContent = sub;
+}
+
+
 // ── Login / Logout Logic ──────────────────────────────
 let CREDS = {
   admin:      { username: 'admin',      password: 'admin123' },
@@ -1222,14 +1555,17 @@ function doLogin() {
 function applyRoleUI(role) {
   const badge = document.getElementById('roleBadge');
   const adminBtn = document.getElementById('adminPanelBtn');
+  const nfcTab = document.getElementById('tab-btn-nfc');
   if (role === 'admin') {
     badge.textContent = '👑 Admin';
     badge.className = 'role-badge role-admin';
     adminBtn.style.display = 'inline-flex';
+    if (nfcTab) nfcTab.style.display = 'inline-block';
   } else {
     badge.textContent = '👤 Management';
     badge.className = 'role-badge role-management';
     adminBtn.style.display = 'none';
+    if (nfcTab) nfcTab.style.display = 'none';
   }
 }
 
