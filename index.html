@@ -849,14 +849,27 @@ function showPerson(trno) {
   const genderClass = photoInfo ? (photoInfo.gender === 'M' ? 'gender-m' : 'gender-f') : '';
   const stdLabel = photoInfo ? photoInfo.std : '';
 
+  const gradInfo = GRADUATED[p.trno];
+  const lastEntryMonth = getLastEntry(p.trno);
+
   content.innerHTML = `
     <div class="person-card">
       <div class="person-header">
         <div>
           <div class="name">${p.name}</div>
         </div>
-        <div class="trno-badge">TR.NO: ${p.trno}</div>
+        <div style="display:flex;align-items:center;gap:8px;">
+          ${gradInfo ? `<span style="background:rgba(255,215,0,0.2);color:#ffd700;border-radius:12px;padding:3px 10px;font-size:0.78rem;font-weight:bold;">🎓 Graduated ${gradInfo.year}</span>` : ''}
+          <div class="trno-badge">TR.NO: ${p.trno}</div>
+        </div>
       </div>
+      ${gradInfo ? `
+      <div class="grad-banner">
+        <span>🎓 This student graduated in <b>${gradInfo.year}</b> from <b>${gradInfo.std || 'N/A'}</b></span>
+        <span class="grad-badge">Alumni Record</span>
+      </div>
+      ${lastEntryMonth ? `<div class="grad-last-entry">📅 Last attendance recorded: <b>${lastEntryMonth}</b></div>` : ''}
+      ` : ''}
       ${photoInfo ? `
       <div class="person-photo-wrap">
         ${photoHtml}
@@ -1213,6 +1226,316 @@ document.addEventListener('DOMContentLoaded', () => {
   initSupabase();
 });
 
+
+
+
+
+// ── GRADUATED STUDENTS LOGIC ──────────────────────────────────
+// Store graduated TRNOs with year: { trno: { year, std, lastEntry } }
+let GRADUATED = {};
+
+function markGraduated(trno) {
+  const year = new Date().getFullYear();
+  const photo = PHOTOS[trno];
+  const person = persons.find(p => p.trno === trno);
+  
+  // Find last attendance entry for this student
+  const lastEntry = getLastEntry(trno);
+  
+  GRADUATED[trno] = {
+    year,
+    std: photo ? photo.std : '',
+    name: person ? person.name : trno,
+    lastEntry
+  };
+  
+  // Update the button to show graduated
+  const btn = document.querySelector(`button[onclick="markGraduated('${trno}')"]`);
+  if (btn) {
+    btn.textContent = '✅ Graduated ' + year;
+    btn.style.background = '#276749';
+    btn.disabled = true;
+  }
+
+  // Save to Supabase
+  if (dbConnected) saveGraduatedToDB(trno, year, photo ? photo.std : '');
+}
+
+function markAllMissingGraduated() {
+  if (!stuUpdatePreview) return;
+  const year = new Date().getFullYear();
+  const { missing } = stuUpdatePreview;
+  
+  if (!confirm(`Mark all ${missing.length} "Not in file" students as Graduated ${year}?`)) return;
+  
+  missing.forEach(t => {
+    if (!GRADUATED[t]) markGraduated(t);
+  });
+  
+  showStuResult('success', `🎓 Marked <b>${missing.length}</b> students as Graduated ${year}!`);
+}
+
+function getLastEntry(trno) {
+  // Find last attendance from DATA
+  const person = persons.find(p => p.trno === trno);
+  if (!person) return null;
+  
+  // Find last month with visits
+  const months = Object.entries(person.monthly).filter(([m, v]) => v > 0);
+  if (!months.length) return null;
+  return months[months.length - 1][0]; // last month with visits
+}
+
+async function saveGraduatedToDB(trno, year, std) {
+  if (!dbConnected) return;
+  try {
+    await fetch(`${SUPABASE_URL}/rest/v1/students?trno=eq.${trno}`, {
+      method: 'PATCH',
+      headers: {
+        'apikey': SUPABASE_ANON_KEY,
+        'Authorization': `Bearer ${SUPABASE_ANON_KEY}`,
+        'Content-Type': 'application/json',
+        'Prefer': 'return=minimal'
+      },
+      body: JSON.stringify({ graduated_year: year, updated_at: new Date().toISOString() })
+    });
+  } catch(e) { console.warn('Could not save graduated status:', e); }
+}
+
+function isGraduated(trno) {
+  return !!GRADUATED[trno];
+}
+
+
+// ── STUDENT LIST UPDATE LOGIC ──────────────────────────────────
+let stuUpdatePreview = null; // holds parsed data before confirm
+
+function handleStuFileDrop(e) {
+  e.preventDefault();
+  document.getElementById('stuUploadArea').style.borderColor = '';
+  const file = e.dataTransfer.files[0];
+  if (file && file.name.endsWith('.xlsx')) handleStudentUpload(file);
+  else showStuResult('error', '❌ Please upload a .xlsx file only.');
+}
+
+async function handleStudentUpload(file) {
+  if (!file) return;
+  document.getElementById('stuProgress').style.display = 'block';
+  document.getElementById('stuPreviewSection').style.display = 'none';
+  document.getElementById('stuResult').style.display = 'none';
+  setStuProgress(10, 'Reading file...');
+
+  try {
+    if (!window.XLSX) {
+      setStuProgress(20, 'Loading Excel reader...');
+      await loadScript('https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js');
+    }
+
+    setStuProgress(40, 'Parsing Excel...');
+    const arrayBuffer = await file.arrayBuffer();
+    const wb = window.XLSX.read(arrayBuffer, { type: 'array' });
+    const ws = wb.Sheets[wb.SheetNames[0]];
+    const rows = window.XLSX.utils.sheet_to_json(ws, { header: 1 });
+
+    const header = rows[0].map(h => String(h || '').trim().toUpperCase());
+    const trnoIdx   = header.findIndex(h => h === 'TRNO');
+    const nameIdx   = header.findIndex(h => h === 'NAME');
+    const classIdx  = header.findIndex(h => h === 'CLASS');
+    const genderIdx = header.findIndex(h => h === 'GENDER');
+    const itsidIdx  = header.findIndex(h => h === 'ITSID');
+
+    if (trnoIdx === -1) {
+      showStuResult('error', '❌ TRNO column not found. Check your Excel format.');
+      document.getElementById('stuProgress').style.display = 'none';
+      return;
+    }
+
+    setStuProgress(60, 'Comparing with existing data...');
+
+    const newStudents  = [];
+    const updated      = [];
+    const same         = [];
+    const dataRows     = rows.slice(1).filter(r => r[trnoIdx]);
+
+    for (const row of dataRows) {
+      const trno   = String(row[trnoIdx]).trim();
+      const name   = String(row[nameIdx] || '').trim();
+      const rawCls = String(row[classIdx] || '').trim();
+      const gender = String(row[genderIdx] || '').trim();
+      const itsid  = itsidIdx >= 0 ? String(row[itsidIdx] || '').trim() : '';
+      const parts  = rawCls.split(' ');
+      const std    = parts.length >= 2 ? parts.slice(0,-1).join(' ') : rawCls;
+
+      const existing = PHOTOS[trno];
+      const existingPerson = persons.find(p => p.trno === trno);
+
+      if (!existingPerson && !existing) {
+        // Brand new student
+        newStudents.push({ trno, name, std, gender, itsid, rawCls });
+      } else {
+        const oldStd = existing ? existing.std : '';
+        if (oldStd !== std) {
+          updated.push({ trno, name, std, gender, itsid, oldStd, newStd: std });
+        } else {
+          same.push({ trno, name, std });
+        }
+      }
+    }
+
+    // Find students in PHOTOS but not in new file (possible transfers/graduates)
+    const newTrnos = new Set(dataRows.map(r => String(r[trnoIdx]).trim()));
+    const missing = Object.keys(PHOTOS).filter(t => !newTrnos.has(t));
+
+    setStuProgress(90, 'Preparing preview...');
+
+    stuUpdatePreview = { newStudents, updated, same, missing, dataRows, trnoIdx, nameIdx, classIdx, genderIdx, itsidIdx };
+
+    // Show summary
+    document.getElementById('suCountNew').textContent = newStudents.length;
+    document.getElementById('suCountUpd').textContent = updated.length;
+    document.getElementById('suCountSame').textContent = same.length;
+    document.getElementById('suCountMissing').textContent = missing.length;
+
+    // Build preview table
+    let tableHtml = '<table class="su-table"><thead><tr><th>TR.NO</th><th>Name</th><th>Class</th><th>Status</th></tr></thead><tbody>';
+
+    newStudents.slice(0, 50).forEach(s => {
+      tableHtml += `<tr><td>${s.trno}</td><td>${s.name}</td><td><span class="std-new">${s.std}</span></td><td><span class="su-badge-new">➕ New</span></td></tr>`;
+    });
+    updated.forEach(s => {
+      tableHtml += `<tr><td>${s.trno}</td><td>${s.name}</td><td><span class="std-old">${s.oldStd}</span> → <span class="std-new">${s.newStd}</span></td><td><span class="su-badge-updated">🔄 Updated</span></td></tr>`;
+    });
+    missing.slice(0, 100).forEach(t => {
+      const photo = PHOTOS[t];
+      const person = persons.find(p => p.trno === t);
+      const name = person ? person.name.split(' ').slice(0,3).join(' ') : '—';
+      tableHtml += `<tr>
+        <td>${t}</td>
+        <td style="color:#555;">${name}</td>
+        <td style="color:#aaa;">${photo ? photo.std : '—'}</td>
+        <td>
+          <span class="su-badge-transfer">⚠️ Not in file</span>
+          <button onclick="markGraduated('${t}')" style="margin-left:6px;background:#744210;color:white;border:none;border-radius:6px;padding:2px 8px;font-size:0.72rem;cursor:pointer;">🎓 Mark Graduated</button>
+        </td>
+      </tr>`;
+    });
+    if (missing.length > 100) {
+      tableHtml += `<tr><td colspan="4" style="color:#aaa;font-size:0.78rem;text-align:center;padding:8px;">... and ${missing.length - 100} more not in file</td></tr>`;
+    }
+    if (same.length > 0) {
+      tableHtml += `<tr><td colspan="4" style="color:#aaa;font-size:0.78rem;text-align:center;padding:10px;">+ ${same.length} students with no changes</td></tr>`;
+    }
+
+    tableHtml += '</tbody></table>';
+    document.getElementById('suPreviewTable').innerHTML = tableHtml;
+
+    setStuProgress(100, 'Ready to apply!');
+    setTimeout(() => {
+      document.getElementById('stuProgress').style.display = 'none';
+      document.getElementById('stuPreviewSection').style.display = 'block';
+    }, 500);
+
+  } catch(e) {
+    console.error(e);
+    showStuResult('error', '❌ Error reading file: ' + e.message);
+    document.getElementById('stuProgress').style.display = 'none';
+  }
+  document.getElementById('stuFileInput').value = '';
+}
+
+async function confirmStudentUpdate() {
+  if (!stuUpdatePreview) return;
+  const { newStudents, updated } = stuUpdatePreview;
+
+  document.getElementById('stuPreviewSection').style.display = 'none';
+  document.getElementById('stuProgress').style.display = 'block';
+  setStuProgress(10, 'Applying updates...');
+
+  let applied = 0;
+  const total = newStudents.length + updated.length;
+
+  // Apply new students to PHOTOS map
+  newStudents.forEach(s => {
+    if (!PHOTOS[s.trno]) {
+      PHOTOS[s.trno] = { photo: null, std: s.std, gender: s.gender };
+    }
+    applied++;
+    setStuProgress(10 + Math.round(applied/total * 60), `Updating ${applied}/${total}...`);
+  });
+
+  // Apply class updates
+  updated.forEach(s => {
+    if (PHOTOS[s.trno]) {
+      PHOTOS[s.trno].std = s.newStd;
+    } else {
+      PHOTOS[s.trno] = { photo: null, std: s.newStd, gender: s.gender };
+    }
+    applied++;
+    setStuProgress(10 + Math.round(applied/total * 60), `Updating ${applied}/${total}...`);
+  });
+
+  setStuProgress(75, 'Saving to database...');
+
+  // Save to Supabase
+  if (dbConnected) {
+    const allRows = [
+      ...newStudents.map(s => ({ trno: s.trno, name: s.name, std: s.std, gender: s.gender, updated_at: new Date().toISOString() })),
+      ...updated.map(s => ({ trno: s.trno, name: s.name, std: s.newStd, gender: s.gender, updated_at: new Date().toISOString() }))
+    ];
+
+    for (let i = 0; i < allRows.length; i += 20) {
+      const chunk = allRows.slice(i, i + 20);
+      await fetch(`${SUPABASE_URL}/rest/v1/students`, {
+        method: 'POST',
+        headers: {
+          'apikey': SUPABASE_ANON_KEY,
+          'Authorization': `Bearer ${SUPABASE_ANON_KEY}`,
+          'Content-Type': 'application/json',
+          'Prefer': 'resolution=merge-duplicates,return=minimal'
+        },
+        body: JSON.stringify(chunk)
+      });
+      setStuProgress(75 + Math.round((i/allRows.length) * 20), 'Syncing to database...');
+    }
+  }
+
+  setStuProgress(100, 'Done!');
+  setTimeout(() => {
+    document.getElementById('stuProgress').style.display = 'none';
+    showStuResult('success',
+      `✅ Update complete!<br>
+      ➕ <b>${newStudents.length}</b> new students added &nbsp;|&nbsp;
+      🔄 <b>${updated.length}</b> classes updated
+      ${dbConnected ? '<br>☁️ All changes synced to database!' : '<br>⚠️ Saved locally (database offline)'}`
+    );
+    refreshPhotoCoverage();
+    stuUpdatePreview = null;
+  }, 600);
+}
+
+function cancelStudentUpdate() {
+  stuUpdatePreview = null;
+  document.getElementById('stuPreviewSection').style.display = 'none';
+  document.getElementById('stuResult').style.display = 'none';
+}
+
+function setStuProgress(pct, text) {
+  const bar = document.getElementById('stuProgressBar');
+  const pctEl = document.getElementById('stuPct');
+  const txtEl = document.getElementById('stuStatusText');
+  if (bar) bar.style.width = pct + '%';
+  if (pctEl) pctEl.textContent = pct + '%';
+  if (txtEl) txtEl.textContent = text;
+}
+
+function showStuResult(type, msg) {
+  const el = document.getElementById('stuResult');
+  el.style.display = 'block';
+  el.style.background = type === 'success' ? '#f0fff4' : '#fff5f5';
+  el.style.border = type === 'success' ? '1px solid #9ae6b4' : '1px solid #feb2b2';
+  el.style.color = type === 'success' ? '#276749' : '#c53030';
+  el.innerHTML = msg;
+}
 
 
 // ── NFC SCANNER LOGIC ──────────────────────────────────
@@ -2045,6 +2368,60 @@ document.getElementById('usernameInput').addEventListener('keydown', e => {
         <button class="admin-btn" onclick="safeCall(changeMgmtPassword)">Update Management Password</button>
         <div class="admin-success" id="mgmtPwdSuccess">✅ Management password updated successfully!</div>
         <div class="admin-error" id="mgmtPwdError"></div>
+      </div>
+    </div>
+
+
+    <!-- Student List Update -->
+    <div class="admin-card">
+      <div class="admin-card-header">👥 Update Student List (Excel Upload)</div>
+      <div class="admin-card-body">
+        <p style="font-size:0.85rem;color:#555;margin-bottom:16px;">
+          Upload your updated student Excel file. The system will automatically detect <b>new students</b>, 
+          <b>class promotions</b> (e.g. 9A→10A), and <b>transfers</b>. Old attendance history is always preserved.
+          <br><br>Required columns: <b>TRNO, ITSID, Name, Class, Gender</b>
+        </p>
+
+        <div class="upload-area" id="stuUploadArea" onclick="document.getElementById('stuFileInput').click()"
+             ondragover="event.preventDefault();this.style.borderColor='#2E75B6'"
+             ondragleave="this.style.borderColor=''"
+             ondrop="handleStuFileDrop(event)">
+          <input type="file" id="stuFileInput" accept=".xlsx" onchange="handleStudentUpload(this.files[0])">
+          <div class="upload-icon">📋</div>
+          <div class="upload-label">Click to browse or drag & drop your updated Excel file</div>
+          <div style="font-size:0.78rem;color:#aaa;margin-top:4px;">Supports .xlsx files · No photos needed</div>
+        </div>
+
+        <!-- Progress -->
+        <div id="stuProgress" style="display:none;margin-top:16px;">
+          <div style="display:flex;justify-content:space-between;font-size:0.82rem;color:#555;margin-bottom:6px;">
+            <span id="stuStatusText">Processing...</span>
+            <span id="stuPct">0%</span>
+          </div>
+          <div style="background:#e0e7ef;border-radius:6px;height:10px;overflow:hidden;">
+            <div id="stuProgressBar" style="height:100%;background:linear-gradient(90deg,#48bb78,#276749);width:0%;transition:width 0.3s;border-radius:6px;"></div>
+          </div>
+        </div>
+
+        <!-- Preview before confirming -->
+        <div id="stuPreviewSection" style="display:none;margin-top:16px;">
+          <div class="su-summary">
+            <div class="su-summary-box su-new"><div class="val" id="suCountNew">0</div><div class="lbl">New Students</div></div>
+            <div class="su-summary-box su-upd"><div class="val" id="suCountUpd">0</div><div class="lbl">Class Updated</div></div>
+            <div class="su-summary-box su-same"><div class="val" id="suCountSame">0</div><div class="lbl">No Change</div></div>
+            <div class="su-summary-box su-trans"><div class="val" id="suCountMissing">0</div><div class="lbl">Not in File</div></div>
+          </div>
+
+          <div class="su-preview" id="suPreviewTable"></div>
+
+          <div style="margin-top:16px;display:flex;gap:8px;flex-wrap:wrap;">
+            <button class="su-confirm-btn" onclick="safeCall(confirmStudentUpdate)">✅ Confirm & Apply Update</button>
+            <button onclick="safeCall(markAllMissingGraduated)" style="background:linear-gradient(135deg,#744210,#c05621);color:white;border:none;border-radius:8px;padding:11px 18px;font-size:0.88rem;font-weight:600;cursor:pointer;">🎓 Mark All "Not in File" as Graduated</button>
+            <button class="su-cancel-btn" onclick="cancelStudentUpdate()">✗ Cancel</button>
+          </div>
+        </div>
+
+        <div id="stuResult" style="display:none;margin-top:14px;padding:14px;border-radius:8px;font-size:0.85rem;"></div>
       </div>
     </div>
 
