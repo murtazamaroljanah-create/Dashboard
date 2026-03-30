@@ -644,6 +644,7 @@
   <button class="tab-btn active" id="tab-btn-lookup" onclick="switchTab('lookup')">🔍 Per Person Lookup</button>
   <button class="tab-btn" id="tab-btn-leaderboard" onclick="switchTab('leaderboard')">🏆 Leaderboard</button>
   <button class="tab-btn" id="tab-btn-nfc" onclick="switchTab('nfc')" style="display:none;">📡 NFC Scanner</button>
+  <button class="tab-btn" id="tab-btn-manual" onclick="switchTab('manual')" style="display:none;">✏️ Manual Entry</button>
 </div>
 
 <!-- TAB: LOOKUP -->
@@ -723,6 +724,86 @@
 
 </div>
 </div><!-- end tab-nfc -->
+
+<!-- TAB: MANUAL ENTRY (Admin only) -->
+<div id="tab-manual" style="display:none;">
+<div class="me-container">
+
+  <!-- Entry Form -->
+  <div class="me-card">
+    <div class="me-card-header">✏️ Add Manual Attendance Entry</div>
+    <div class="me-card-body">
+
+      <!-- Student search -->
+      <div class="me-field full" style="margin-bottom:12px;">
+        <label>Search Student (TR.NO or Name)</label>
+        <div class="me-suggest-wrap">
+          <input type="text" id="meSearchInput" placeholder="e.g. 25888 or Hatim..." autocomplete="off"
+            oninput="meHandleSearch(this.value)" onblur="setTimeout(()=>document.getElementById('meDropdown').style.display='none',200)">
+          <div class="me-dropdown" id="meDropdown"></div>
+        </div>
+      </div>
+
+      <!-- Student preview -->
+      <div class="me-student-preview" id="meStudentPreview">
+        <div id="mePreviewPhotoWrap"></div>
+        <div class="me-preview-info">
+          <div class="me-preview-name" id="mePreviewName"></div>
+          <div class="me-preview-meta" id="mePreviewMeta"></div>
+        </div>
+      </div>
+
+      <!-- Form fields -->
+      <div class="me-form-grid">
+        <div class="me-field">
+          <label>Date</label>
+          <input type="date" id="meDate">
+        </div>
+        <div class="me-field">
+          <label>Purpose</label>
+          <select id="mePurpose">
+            <option value="practice">Practice</option>
+            <option value="Audition">Audition</option>
+            <option value="Class">Class</option>
+            <option value="Tadreeb recording">Tadreeb Recording</option>
+            <option value="Meeting">Meeting</option>
+            <option value="Recording">Recording</option>
+            <option value="Riyaz">Riyaz</option>
+            <option value="other">Other</option>
+          </select>
+        </div>
+        <div class="me-field">
+          <label>Time In</label>
+          <input type="time" id="meTimeIn">
+        </div>
+        <div class="me-field">
+          <label>Time Out</label>
+          <input type="time" id="meTimeOut">
+        </div>
+      </div>
+
+      <input type="hidden" id="meSelectedTrno" value="">
+
+      <button class="me-submit-btn" onclick="safeCall(submitManualEntry)">➕ Add Entry</button>
+
+      <div class="me-success" id="meSuccess"></div>
+      <div class="me-error" id="meError"></div>
+    </div>
+  </div>
+
+  <!-- Recent Manual Entries -->
+  <div class="me-card">
+    <div class="me-card-header">📋 Recent Manual Entries</div>
+    <div style="padding:0 24px 20px;">
+      <div id="meLogBody">
+        <div style="text-align:center;padding:24px;color:#aaa;font-size:0.88rem;">No manual entries yet.</div>
+      </div>
+    </div>
+  </div>
+
+</div>
+</div><!-- end tab-manual -->
+
 
 
 <script>
@@ -934,7 +1015,7 @@ let lbMode = 'weekly'; // 'weekly' or 'monthly'
 let lbPeriod = LB.weeks[LB.weeks.length - 1]; // default last week
 
 function switchTab(tab) {
-  ['lookup','leaderboard','nfc'].forEach(t => {
+  ['lookup','leaderboard','nfc','manual'].forEach(t => {
     const el = document.getElementById('tab-' + t);
     const btn = document.getElementById('tab-btn-' + t);
     if (el) el.style.display = t === tab ? 'block' : 'none';
@@ -942,6 +1023,7 @@ function switchTab(tab) {
   });
   if (tab === 'leaderboard') renderLeaderboard();
   if (tab === 'nfc') initNFCTab();
+  if (tab === 'manual') initManualEntry();
 }
 
 function setLbMode(mode) {
@@ -1228,6 +1310,203 @@ document.addEventListener('DOMContentLoaded', () => {
 
 
 
+
+
+
+// ── MANUAL ENTRY LOGIC ──────────────────────────────────
+let manualEntries = []; // local log of manual entries this session
+let meSelectedPerson = null;
+
+function initManualEntry() {
+  // Set today's date as default
+  const today = new Date().toISOString().split('T')[0];
+  const dateEl = document.getElementById('meDate');
+  if (dateEl && !dateEl.value) dateEl.value = today;
+  renderManualLog();
+}
+
+function meHandleSearch(q) {
+  const dd = document.getElementById('meDropdown');
+  q = q.trim();
+  if (!q) { dd.style.display = 'none'; clearMePreview(); return; }
+
+  const matches = persons.filter(p =>
+    p.trno.includes(q) || p.name.toLowerCase().includes(q.toLowerCase())
+  ).slice(0, 8);
+
+  if (!matches.length) { dd.style.display = 'none'; return; }
+
+  dd.innerHTML = matches.map(p => `
+    <div class="me-dd-item" onmousedown="selectMeStudent('${p.trno}')">
+      <span>${p.name}</span>
+      <span class="me-dd-trno">${p.trno}</span>
+    </div>`).join('');
+  dd.style.display = 'block';
+}
+
+function selectMeStudent(trno) {
+  const person = persons.find(p => p.trno === trno);
+  if (!person) return;
+  meSelectedPerson = person;
+
+  document.getElementById('meSearchInput').value = `${person.name} (${trno})`;
+  document.getElementById('meSelectedTrno').value = trno;
+  document.getElementById('meDropdown').style.display = 'none';
+
+  // Show preview
+  const photoInfo = PHOTOS[trno];
+  const preview = document.getElementById('meStudentPreview');
+  const photoWrap = document.getElementById('mePreviewPhotoWrap');
+
+  photoWrap.innerHTML = photoInfo && photoInfo.photo
+    ? `<img class="me-preview-photo" src="data:image/jpeg;base64,${photoInfo.photo}" alt="">`
+    : `<div class="me-preview-placeholder">${person.name.charAt(0)}</div>`;
+
+  document.getElementById('mePreviewName').textContent = person.name;
+  document.getElementById('mePreviewMeta').textContent =
+    `TR.NO: ${trno}${photoInfo ? ' · ' + photoInfo.std : ''} · Total Visits: ${person.total_visits}`;
+
+  preview.style.display = 'flex';
+}
+
+function clearMePreview() {
+  meSelectedPerson = null;
+  document.getElementById('meSelectedTrno').value = '';
+  document.getElementById('meStudentPreview').style.display = 'none';
+}
+
+async function submitManualEntry() {
+  const trno     = document.getElementById('meSelectedTrno').value.trim();
+  const date     = document.getElementById('meDate').value;
+  const timeIn   = document.getElementById('meTimeIn').value;
+  const timeOut  = document.getElementById('meTimeOut').value;
+  const purpose  = document.getElementById('mePurpose').value;
+  const errEl    = document.getElementById('meError');
+  const sucEl    = document.getElementById('meSuccess');
+
+  errEl.style.display = 'none';
+  sucEl.style.display = 'none';
+
+  // Validation
+  if (!trno)    { errEl.textContent = '❌ Please select a student first.'; errEl.style.display = 'block'; return; }
+  if (!date)    { errEl.textContent = '❌ Please select a date.'; errEl.style.display = 'block'; return; }
+  if (!timeIn)  { errEl.textContent = '❌ Please enter Time In.'; errEl.style.display = 'block'; return; }
+  if (!timeOut) { errEl.textContent = '❌ Please enter Time Out.'; errEl.style.display = 'block'; return; }
+
+  // Calculate duration
+  const [inH, inM]   = timeIn.split(':').map(Number);
+  const [outH, outM] = timeOut.split(':').map(Number);
+  const diffMins = (outH * 60 + outM) - (inH * 60 + inM);
+
+  if (diffMins <= 0) { errEl.textContent = '❌ Time Out must be after Time In.'; errEl.style.display = 'block'; return; }
+
+  const seconds = diffMins * 60;
+  const durationStr = diffMins >= 60
+    ? `${Math.floor(diffMins/60)}h ${diffMins%60}m`
+    : `${diffMins} min`;
+
+  const person = meSelectedPerson || persons.find(p => p.trno === trno);
+  const name   = person ? person.name : trno;
+
+  // Format times for display
+  const fmtTime = (t) => {
+    const [h, m] = t.split(':').map(Number);
+    const ampm = h >= 12 ? 'PM' : 'AM';
+    return `${h % 12 || 12}:${m.toString().padStart(2,'0')} ${ampm}`;
+  };
+
+  // Add to local log
+  const entry = {
+    id: Date.now(),
+    trno, name, date, timeIn: fmtTime(timeIn),
+    timeOut: fmtTime(timeOut), duration: durationStr,
+    purpose, seconds, manual: true
+  };
+  manualEntries.unshift(entry);
+
+  // Save to Supabase
+  let savedToDb = false;
+  if (dbConnected) {
+    try {
+      const res = await fetch(`${SUPABASE_URL}/rest/v1/attendance`, {
+        method: 'POST',
+        headers: {
+          'apikey': SUPABASE_ANON_KEY,
+          'Authorization': `Bearer ${SUPABASE_ANON_KEY}`,
+          'Content-Type': 'application/json',
+          'Prefer': 'return=minimal'
+        },
+        body: JSON.stringify({
+          date, trno, name, time_in: fmtTime(timeIn),
+          time_out: fmtTime(timeOut), purpose, seconds,
+          duration: durationStr
+        })
+      });
+      savedToDb = res.ok;
+    } catch(e) { console.warn('DB save failed:', e); }
+  }
+
+  // Show success
+  sucEl.innerHTML = `✅ Entry added for <b>${name}</b><br>
+    📅 ${date} &nbsp;|&nbsp; ⏰ ${fmtTime(timeIn)} → ${fmtTime(timeOut)} &nbsp;|&nbsp; ⏱ ${durationStr}
+    ${savedToDb ? '<br>☁️ Saved to database!' : ''}`;
+  sucEl.style.display = 'block';
+
+  // Reset form
+  document.getElementById('meSearchInput').value = '';
+  document.getElementById('meSelectedTrno').value = '';
+  document.getElementById('meTimeIn').value = '';
+  document.getElementById('meTimeOut').value = '';
+  document.getElementById('meStudentPreview').style.display = 'none';
+  meSelectedPerson = null;
+
+  renderManualLog();
+
+  setTimeout(() => sucEl.style.display = 'none', 5000);
+}
+
+function renderManualLog() {
+  const body = document.getElementById('meLogBody');
+  if (!body) return;
+
+  if (!manualEntries.length) {
+    body.innerHTML = '<div style="text-align:center;padding:24px;color:#aaa;font-size:0.88rem;">No manual entries yet.</div>';
+    return;
+  }
+
+  body.innerHTML = `
+    <table class="me-log-table">
+      <thead><tr>
+        <th>Student</th>
+        <th>TR.NO</th>
+        <th>Date</th>
+        <th>Time In</th>
+        <th>Time Out</th>
+        <th>Duration</th>
+        <th>Purpose</th>
+        <th></th>
+      </tr></thead>
+      <tbody>
+        ${manualEntries.map(e => `
+          <tr>
+            <td>${e.name.split(' ').slice(0,2).join(' ')}</td>
+            <td style="font-weight:bold;color:#2E75B6;">${e.trno}</td>
+            <td>${e.date}</td>
+            <td>${e.timeIn}</td>
+            <td>${e.timeOut}</td>
+            <td>${e.duration}</td>
+            <td><span class="me-manual-badge">${e.purpose}</span></td>
+            <td><button class="me-delete-btn" onclick="deleteManualEntry(${e.id})">🗑</button></td>
+          </tr>`).join('')}
+      </tbody>
+    </table>`;
+}
+
+function deleteManualEntry(id) {
+  if (!confirm('Remove this manual entry?')) return;
+  manualEntries = manualEntries.filter(e => e.id !== id);
+  renderManualLog();
+}
 
 
 // ── GRADUATED STUDENTS LOGIC ──────────────────────────────────
@@ -1879,16 +2158,19 @@ function applyRoleUI(role) {
   const badge = document.getElementById('roleBadge');
   const adminBtn = document.getElementById('adminPanelBtn');
   const nfcTab = document.getElementById('tab-btn-nfc');
+  const manualTab = document.getElementById('tab-btn-manual');
   if (role === 'admin') {
     badge.textContent = '👑 Admin';
     badge.className = 'role-badge role-admin';
     adminBtn.style.display = 'inline-flex';
     if (nfcTab) nfcTab.style.display = 'inline-block';
+    if (manualTab) manualTab.style.display = 'inline-block';
   } else {
     badge.textContent = '👤 Management';
     badge.className = 'role-badge role-management';
     adminBtn.style.display = 'none';
     if (nfcTab) nfcTab.style.display = 'none';
+    if (manualTab) manualTab.style.display = 'none';
   }
 }
 
