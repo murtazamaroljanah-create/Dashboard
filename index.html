@@ -869,6 +869,9 @@ function doSearch() {
   if (!q) return;
   // Exact trno match first
   if (byTrno[q]) { showPerson(q); return; }
+  // Check if it's a new student added via manual entry
+  const manualMatch = manualEntries.find(e => e.trno === q);
+  if (manualMatch && !byTrno[q]) { showNewStudentFromManual(q); return; }
   // Otherwise show results list
   const matches = getMatches(q);
   if (!matches.length) {
@@ -898,8 +901,37 @@ function showList(matches, q) {
 }
 
 function showPerson(trno) {
-  const p = byTrno[trno];
-  if (!p) return;
+  const baseP = byTrno[trno];
+  if (!baseP) return;
+
+  // Merge manual entries into person data (deep copy to avoid mutating original)
+  const p = JSON.parse(JSON.stringify(baseP));
+  const myManual = manualEntries.filter(e => e.trno === trno);
+  if (myManual.length > 0) {
+    myManual.forEach(e => {
+      // Add to total visits
+      p.total_visits = (p.total_visits || 0) + 1;
+      // Add to monthly count
+      const entryDate = new Date(e.date);
+      const monthKey = entryDate.toLocaleDateString('en-US', { month: 'short', year: 'numeric' }).replace(' ', ' ');
+      // Try to match existing month keys
+      for (const mk of Object.keys(p.monthly)) {
+        const d = new Date(mk + ' 01');
+        if (d.getMonth() === entryDate.getMonth() && d.getFullYear() === entryDate.getFullYear()) {
+          p.monthly[mk] = (p.monthly[mk] || 0) + 1;
+          break;
+        }
+      }
+      // Add to purposes
+      p.purposes = p.purposes || {};
+      p.purposes[e.purpose] = (p.purposes[e.purpose] || 0) + 1;
+      // Recalculate avg
+      const totalSec = (p.avg_min * 60 * (p.total_visits - 1) + e.seconds) / p.total_visits;
+      p.avg_min = Math.round(totalSec / 60 * 10) / 10;
+      p.avg_hours = Math.round(totalSec / 3600 * 100) / 100;
+    });
+  }
+
   const maxM = Math.max(...Object.values(p.monthly), 1);
   const monthRows = months.map(m => {
     const c = p.monthly[m] || 0;
@@ -1506,6 +1538,63 @@ function deleteManualEntry(id) {
   if (!confirm('Remove this manual entry?')) return;
   manualEntries = manualEntries.filter(e => e.id !== id);
   renderManualLog();
+}
+
+
+
+// Show profile for students only in manual entries (not in original Excel)
+function showNewStudentFromManual(trno) {
+  const entries = manualEntries.filter(e => e.trno === trno);
+  if (!entries.length) return;
+  const name = entries[0].name || trno;
+  const photoInfo = PHOTOS[trno];
+  const photoHtml = photoInfo && photoInfo.photo
+    ? `<img class="person-photo" src="data:image/jpeg;base64,${photoInfo.photo}" alt="${name}">`
+    : `<div class="person-photo-placeholder">${name.charAt(0)}</div>`;
+
+  const totalVisits = entries.length;
+  const avgSec = entries.reduce((s, e) => s + (e.seconds || 0), 0) / totalVisits;
+  const avgMin = Math.round(avgSec / 60 * 10) / 10;
+  const avgHrs = Math.round(avgSec / 3600 * 100) / 100;
+
+  const logRows = entries.map(e => `
+    <tr>
+      <td>${e.date}</td>
+      <td>${e.timeIn}</td>
+      <td>${e.timeOut}</td>
+      <td>${e.duration}</td>
+      <td><span class="me-manual-badge">${e.purpose}</span></td>
+    </tr>`).join('');
+
+  content.innerHTML = `
+    <div class="person-card">
+      <div class="person-header">
+        <div><div class="name">${name}</div></div>
+        <div style="display:flex;align-items:center;gap:8px;">
+          <span style="background:rgba(100,200,100,0.2);color:#68d391;border-radius:12px;padding:3px 10px;font-size:0.78rem;font-weight:bold;">✏️ Manual Entry</span>
+          <div class="trno-badge">TR.NO: ${trno}</div>
+        </div>
+      </div>
+      <div class="person-photo-wrap">
+        ${photoHtml}
+        <div class="person-meta">
+          <div class="meta-badge">📋 Total Visits: <b>${totalVisits}</b></div>
+          <div class="meta-badge">⏱ Avg Duration: <b>${avgMin} min</b></div>
+        </div>
+      </div>
+      <div class="kpi-row">
+        <div class="kpi-box"><div class="kpi-val">${totalVisits}</div><div class="kpi-label">Total Visits</div></div>
+        <div class="kpi-box"><div class="kpi-val">${avgHrs}h</div><div class="kpi-label">Avg Duration</div></div>
+        <div class="kpi-box"><div class="kpi-val">${avgMin} min</div><div class="kpi-label">Avg in Minutes</div></div>
+      </div>
+      <div style="padding:16px 24px;">
+        <div style="font-size:0.85rem;font-weight:bold;color:#1F3864;margin-bottom:10px;">✏️ Manual Entry History</div>
+        <table class="me-log-table">
+          <thead><tr><th>Date</th><th>Time In</th><th>Time Out</th><th>Duration</th><th>Purpose</th></tr></thead>
+          <tbody>${logRows}</tbody>
+        </table>
+      </div>
+    </div>`;
 }
 
 
