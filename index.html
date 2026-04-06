@@ -1340,6 +1340,45 @@ document.addEventListener('DOMContentLoaded', () => {
   initSupabase();
 });
 
+// Load manual entries after login (called from applyRoleUI)
+async function loadManualEntriesFromDB() {
+  if (!dbConnected) return;
+  try {
+    setSyncStatus('syncing', '⟳ Loading manual entries...');
+    const res = await fetch(
+      `${SUPABASE_URL}/rest/v1/attendance?is_manual=eq.true&order=created_at.desc&limit=500`,
+      { headers: { 'apikey': SUPABASE_ANON_KEY, 'Authorization': `Bearer ${SUPABASE_ANON_KEY}` }}
+    );
+    if (!res.ok) return;
+    const data = await res.json();
+    if (!data || !data.length) return;
+
+    // Map DB rows to manualEntries format
+    manualEntries = data.map(row => ({
+      id: row.id,
+      dbId: row.id,
+      trno: row.trno || '',
+      name: row.name || row.trno || '',
+      date: row.date || '',
+      timeIn: row.time_in || '',
+      timeOut: row.time_out || '',
+      duration: row.duration || '',
+      purpose: row.purpose || '',
+      seconds: row.seconds || 0,
+      manual: true
+    }));
+
+    setSyncStatus('connected', `☁️ Database connected · ${manualEntries.length} manual entries loaded`);
+
+    // Refresh manual entry tab if open
+    const logBody = document.getElementById('meLogBody');
+    if (logBody) renderManualLog();
+
+  } catch(e) {
+    console.warn('Could not load manual entries:', e);
+  }
+}
+
 
 
 
@@ -1456,7 +1495,7 @@ async function submitManualEntry() {
   };
   manualEntries.unshift(entry);
 
-  // Save to Supabase
+  // Save to Supabase and get back the ID
   let savedToDb = false;
   if (dbConnected) {
     try {
@@ -1466,15 +1505,19 @@ async function submitManualEntry() {
           'apikey': SUPABASE_ANON_KEY,
           'Authorization': `Bearer ${SUPABASE_ANON_KEY}`,
           'Content-Type': 'application/json',
-          'Prefer': 'return=minimal'
+          'Prefer': 'return=representation'
         },
         body: JSON.stringify({
           date, trno, name, time_in: fmtTime(timeIn),
           time_out: fmtTime(timeOut), purpose, seconds,
-          duration: durationStr
+          duration: durationStr, is_manual: true
         })
       });
-      savedToDb = res.ok;
+      if (res.ok) {
+        savedToDb = true;
+        const dbData = await res.json();
+        if (dbData && dbData[0]) entry.dbId = dbData[0].id;
+      }
     } catch(e) { console.warn('DB save failed:', e); }
   }
 
@@ -1534,10 +1577,26 @@ function renderManualLog() {
     </table>`;
 }
 
-function deleteManualEntry(id) {
+async function deleteManualEntry(id) {
   if (!confirm('Remove this manual entry?')) return;
+  const entry = manualEntries.find(e => e.id === id);
   manualEntries = manualEntries.filter(e => e.id !== id);
   renderManualLog();
+
+  // Delete from Supabase using dbId
+  const dbId = entry && (entry.dbId || (typeof entry.id === 'number' && entry.id > 1000000000000 ? null : entry.id));
+  if (dbConnected && dbId) {
+    try {
+      await fetch(`${SUPABASE_URL}/rest/v1/attendance?id=eq.${dbId}`, {
+        method: 'DELETE',
+        headers: {
+          'apikey': SUPABASE_ANON_KEY,
+          'Authorization': `Bearer ${SUPABASE_ANON_KEY}`,
+          'Prefer': 'return=minimal'
+        }
+      });
+    } catch(e) { console.warn('DB delete failed:', e); }
+  }
 }
 
 
@@ -2254,6 +2313,8 @@ function applyRoleUI(role) {
     adminBtn.style.display = 'inline-flex';
     if (nfcTab) nfcTab.style.display = 'inline-block';
     if (manualTab) manualTab.style.display = 'inline-block';
+    // Load manual entries from DB
+    loadManualEntriesFromDB();
   } else {
     badge.textContent = '👤 Management';
     badge.className = 'role-badge role-management';
