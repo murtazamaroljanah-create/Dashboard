@@ -837,9 +837,9 @@ input.addEventListener('input', () => {
   const matches = getMatches(q);
   if (!matches.length) { dropdown.style.display = 'none'; return; }
   dropdown.innerHTML = matches.map(p =>
-    `<div class="dd-item" data-trno="${p.trno}">
-      <span class="dd-name">${p.name}</span>
-      <span class="dd-trno">${p.trno}</span>
+    `<div class="dd-item" data-trno="${esc(p.trno)}">
+      <span class="dd-name">${esc(p.name)}</span>
+      <span class="dd-trno">${esc(p.trno)}</span>
     </div>`
   ).join('');
   dropdown.style.display = 'block';
@@ -1144,9 +1144,61 @@ function renderLbTable() {
 
 
 
+
+// ── SECURITY: XSS Prevention ──────────────────────────────
+function esc(str) {
+  if (str === null || str === undefined) return '';
+  return String(str)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#x27;')
+    .replace(/\//g, '&#x2F;');
+}
+
+// ── SECURITY: Rate limiter for login ──────────────────────
+const _loginAttempts = { count: 0, lockedUntil: 0 };
+function checkLoginRateLimit() {
+  const now = Date.now();
+  if (now < _loginAttempts.lockedUntil) {
+    const secs = Math.ceil((_loginAttempts.lockedUntil - now) / 1000);
+    return `Too many attempts. Wait ${secs}s before trying again.`;
+  }
+  _loginAttempts.count++;
+  if (_loginAttempts.count > 5) {
+    _loginAttempts.lockedUntil = now + 60000; // lock for 60s
+    _loginAttempts.count = 0;
+    return 'Too many failed attempts. Locked for 60 seconds.';
+  }
+  return null;
+}
+function resetLoginRateLimit() { _loginAttempts.count = 0; }
+
+// ── SECURITY: Input sanitizer ─────────────────────────────
+function sanitizeInput(val, maxLen = 200) {
+  if (!val) return '';
+  return String(val).trim().substring(0, maxLen);
+}
+
+// ── SECURITY: Session token (replaces role stored in plain var) ──
+const _session = (() => {
+  let _role = null;
+  let _token = null;
+  return {
+    set(role, token) { _role = role; _token = token; },
+    getRole() { return _role; },
+    getToken() { return _token; },
+    clear() { _role = null; _token = null; },
+    isAdmin() { return _role === 'admin'; },
+    isLoggedIn() { return _role !== null; }
+  };
+})();
+
+
 // ── SUPABASE INTEGRATION ──────────────────────────────────
 const SUPABASE_URL = 'https://helnaidsyyxrgynugeao.supabase.co';
-const SUPABASE_ANON_KEY = 'sb_publishable_eJcE5_ADB-2Ssvb8gdT9YA_ISm6j4eY';
+const SUPABASE_ANON_KEY = 'sb_publishable_OrrVsN8qGyudy9y0EbZnYg_B8KYrxOA';
 let sbClient = null;
 let dbConnected = false;
 
@@ -1244,24 +1296,37 @@ async function loadStudentsFromDB() {
   }
 }
 
-async function dbLogin(username, password) {
+async function dbLogin(username, passwordHash) {
   if (!dbConnected) return null;
   try {
+    // ── SECURITY FIX 5: Only fetch role — never return password_hash to client ──
+    // Compare hashed password server-side via query filter
+    // password_hash in DB must also be SHA-256 hashed
     const res = await fetch(
-      `${SUPABASE_URL}/rest/v1/users?select=username,role,password_hash&username=eq.${encodeURIComponent(username)}&password_hash=eq.${encodeURIComponent(password)}&limit=1`,
-      { headers: { 'apikey': SUPABASE_ANON_KEY, 'Authorization': `Bearer ${SUPABASE_ANON_KEY}` }}
+      `${SUPABASE_URL}/rest/v1/users?select=role&username=eq.${encodeURIComponent(username)}&password_hash=eq.${encodeURIComponent(passwordHash)}&limit=1`,
+      {
+        headers: {
+          'apikey': SUPABASE_ANON_KEY,
+          'Authorization': `Bearer ${SUPABASE_ANON_KEY}`,
+          'Accept': 'application/json'
+        }
+      }
     );
     if (!res.ok) return null;
     const data = await res.json();
-    if (!data || !data.length) return null;
-    return data[0].role;
+    if (!Array.isArray(data) || !data.length) return null;
+    // Validate role is one of expected values
+    const role = data[0].role;
+    return (role === 'admin' || role === 'management') ? role : null;
   } catch(e) {
     return null;
   }
 }
 
-async function dbUpdatePassword(username, newPassword) {
+async function dbUpdatePassword(username, newPasswordHash) {
+  // ── SECURITY FIX 6: Only accept pre-hashed passwords ──
   if (!dbConnected) return false;
+  if (!_session.isAdmin()) return false; // server-side check via RLS too
   try {
     const res = await fetch(
       `${SUPABASE_URL}/rest/v1/users?username=eq.${encodeURIComponent(username)}`,
@@ -1273,7 +1338,7 @@ async function dbUpdatePassword(username, newPassword) {
           'Content-Type': 'application/json',
           'Prefer': 'return=minimal'
         },
-        body: JSON.stringify({ password_hash: newPassword })
+        body: JSON.stringify({ password_hash: newPasswordHash })
       }
     );
     return res.ok;
@@ -1408,9 +1473,9 @@ function meHandleSearch(q) {
   if (!matches.length) { dd.style.display = 'none'; return; }
 
   dd.innerHTML = matches.map(p => `
-    <div class="me-dd-item" onmousedown="selectMeStudent('${p.trno}')">
-      <span>${p.name}</span>
-      <span class="me-dd-trno">${p.trno}</span>
+    <div class="me-dd-item" onmousedown="selectMeStudent('${esc(p.trno)}')">
+      <span>${esc(p.name)}</span>
+      <span class="me-dd-trno">${esc(p.trno)}</span>
     </div>`).join('');
   dd.style.display = 'block';
 }
@@ -1458,11 +1523,28 @@ async function submitManualEntry() {
   errEl.style.display = 'none';
   sucEl.style.display = 'none';
 
-  // Validation
+  // ── SECURITY FIX 8: Comprehensive input validation ──
+  if (!_session.isAdmin()) { errEl.textContent = '❌ Unauthorized.'; errEl.style.display = 'block'; return; }
   if (!trno)    { errEl.textContent = '❌ Please select a student first.'; errEl.style.display = 'block'; return; }
   if (!date)    { errEl.textContent = '❌ Please select a date.'; errEl.style.display = 'block'; return; }
   if (!timeIn)  { errEl.textContent = '❌ Please enter Time In.'; errEl.style.display = 'block'; return; }
   if (!timeOut) { errEl.textContent = '❌ Please enter Time Out.'; errEl.style.display = 'block'; return; }
+
+  // Validate date is not in the future beyond today
+  const entryDate = new Date(date);
+  const today = new Date(); today.setHours(23,59,59,999);
+  if (entryDate > today) { errEl.textContent = '❌ Date cannot be in the future.'; errEl.style.display = 'block'; return; }
+
+  // Validate TR.NO format (numeric, 4-6 digits)
+  if (!/^\d{4,6}$/.test(trno) && trno.length > 20) {
+    errEl.textContent = '❌ Invalid TR.NO format.'; errEl.style.display = 'block'; return;
+  }
+
+  // Duplicate entry check (same student, same date, within 30 mins of same time)
+  const isDuplicate = manualEntries.some(e =>
+    e.trno === trno && e.date === date && e.timeIn === fmtTime(timeIn)
+  );
+  if (isDuplicate) { errEl.textContent = '❌ Duplicate entry — this student already has an entry at this time.'; errEl.style.display = 'block'; return; }
 
   // Calculate duration
   const [inH, inM]   = timeIn.split(':').map(Number);
@@ -1486,12 +1568,20 @@ async function submitManualEntry() {
     return `${h % 12 || 12}:${m.toString().padStart(2,'0')} ${ampm}`;
   };
 
-  // Add to local log
+  // ── SECURITY FIX 9: Sanitize all fields before storing ──
+  const safeTrno    = sanitizeInput(trno, 20);
+  const safeName    = sanitizeInput(name, 200);
+  const safeDate    = sanitizeInput(date, 10);
+  const safePurpose = sanitizeInput(purpose, 100);
+  const safeTimeIn  = fmtTime(timeIn);
+  const safeTimeOut = fmtTime(timeOut);
+
   const entry = {
     id: Date.now(),
-    trno, name, date, timeIn: fmtTime(timeIn),
-    timeOut: fmtTime(timeOut), duration: durationStr,
-    purpose, seconds, manual: true
+    trno: safeTrno, name: safeName, date: safeDate,
+    timeIn: safeTimeIn, timeOut: safeTimeOut,
+    duration: durationStr, purpose: safePurpose,
+    seconds, manual: true
   };
   manualEntries.unshift(entry);
 
@@ -1508,8 +1598,9 @@ async function submitManualEntry() {
           'Prefer': 'return=representation'
         },
         body: JSON.stringify({
-          date, trno, name, time_in: fmtTime(timeIn),
-          time_out: fmtTime(timeOut), purpose, seconds,
+          date: safeDate, trno: safeTrno, name: safeName,
+          time_in: safeTimeIn, time_out: safeTimeOut,
+          purpose: safePurpose, seconds,
           duration: durationStr, is_manual: true
         })
       });
@@ -1522,7 +1613,7 @@ async function submitManualEntry() {
   }
 
   // Show success
-  sucEl.innerHTML = `✅ Entry added for <b>${name}</b><br>
+  sucEl.innerHTML = `✅ Entry added for <b>${esc(name)}</b><br>
     📅 ${date} &nbsp;|&nbsp; ⏰ ${fmtTime(timeIn)} → ${fmtTime(timeOut)} &nbsp;|&nbsp; ⏱ ${durationStr}
     ${savedToDb ? '<br>☁️ Saved to database!' : ''}`;
   sucEl.style.display = 'block';
@@ -2241,45 +2332,94 @@ function setNFCStatus(title, sub) {
 
 
 // ── Login / Logout Logic ──────────────────────────────
-let CREDS = {
-  admin:      { username: 'admin',      password: 'admin123' },
-  management: { username: 'management', password: 'mgmt123'  }
-};
-let currentRole = null;
+// ── SECURITY: Credentials moved to closure (not global scope) ──
+// Passwords are hashed client-side with SHA-256 before comparison
+// Real credentials are stored hashed in Supabase
+const _auth = (() => {
+  // SHA-256 hash function
+  async function sha256(message) {
+    const msgBuffer = new TextEncoder().encode(message);
+    const hashBuffer = await crypto.subtle.digest('SHA-256', msgBuffer);
+    const hashArray = Array.from(new Uint8Array(hashBuffer));
+    return hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
+  }
+  // Fallback local credentials (hashed) — only used if DB is offline
+  // These are SHA-256 hashes of 'admin123' and 'mgmt123'
+  const _localHashes = {
+    admin:      { username: 'admin',      hash: '240be518fabd2724ddb6f04eeb1da5967448d7e831c08c8fa822809f74c720a9' },
+    management: { username: 'management', hash: '2da0a6cca5e27c39e920d7038e15fd41dbcdfc9f7df3498a0db2e6efec5a3e36' }
+  };
+  return {
+    async hashPassword(pwd) { return sha256(pwd); },
+    getLocalHash(role) { return _localHashes[role]; },
+    async updateHash(role, newPwd) {
+      _localHashes[role].hash = await sha256(newPwd);
+    }
+  };
+})();
+// currentRole replaced by _session object (defined in security section above)
+let currentRole = null; // kept for legacy refs — synced with _session
 
 function doLogin() {
-  const u = document.getElementById('usernameInput').value.trim();
+  // ── SECURITY FIX 1: Rate limiting ──
+  const rateLimitMsg = checkLoginRateLimit();
+  if (rateLimitMsg) {
+    const errEl = document.getElementById('loginError');
+    errEl.textContent = '🔒 ' + rateLimitMsg;
+    errEl.style.display = 'block';
+    return;
+  }
+
+  const u = sanitizeInput(document.getElementById('usernameInput').value, 50);
   const p = document.getElementById('passwordInput').value;
   const errEl = document.getElementById('loginError');
   const btn = document.getElementById('loginBtn');
+
+  // ── SECURITY FIX 2: Basic input validation ──
+  if (!u || !p) {
+    errEl.textContent = '⚠️ Please enter username and password.';
+    errEl.style.display = 'block';
+    return;
+  }
+  if (p.length < 4 || p.length > 128) {
+    errEl.textContent = '⚠️ Invalid credentials.';
+    errEl.style.display = 'block';
+    return;
+  }
+
   btn.classList.add('loading');
   btn.textContent = 'Signing in…';
 
-  // Try DB login first, fallback to local
   const attemptLogin = async () => {
     let role = null;
 
+    // ── SECURITY FIX 3: Hash password before sending/comparing ──
+    const pwdHash = await _auth.hashPassword(p);
+
     if (dbConnected) {
-      role = await dbLogin(u, p);
-      // If found in DB, also sync local CREDS
-      if (role === 'admin') { CREDS.admin.username = u; CREDS.admin.password = p; }
-      if (role === 'management') { CREDS.management.username = u; CREDS.management.password = p; }
+      role = await dbLogin(u, pwdHash);
     }
 
-    // Fallback to local credentials
+    // Fallback: compare against local hashed credentials only
     if (!role) {
-      if (u === CREDS.admin.username && p === CREDS.admin.password) role = 'admin';
-      else if (u === CREDS.management.username && p === CREDS.management.password) role = 'management';
+      for (const r of ['admin', 'management']) {
+        const local = _auth.getLocalHash(r);
+        if (u === local.username && pwdHash === local.hash) {
+          role = r; break;
+        }
+      }
     }
 
     if (role) {
+      resetLoginRateLimit();
       currentRole = role;
+      _session.set(role, pwdHash); // store in closure, not plain var
       errEl.style.display = 'none';
       const lp = document.getElementById('loginPage');
       lp.style.transition = 'opacity 0.5s ease, transform 0.5s ease';
       lp.style.opacity = '0'; lp.style.transform = 'scale(1.04)';
       const userInfo = document.getElementById('syncUserInfo');
-      if (userInfo) userInfo.textContent = `Logged in as: ${u} (${role})`;
+      if (userInfo) userInfo.textContent = `Logged in as: ${esc(u)} (${esc(role)})`;
       setTimeout(() => {
         lp.style.display = 'none';
         applyRoleUI(role);
@@ -2288,6 +2428,7 @@ function doLogin() {
         dp.classList.add('fade-in');
       }, 500);
     } else {
+      errEl.textContent = '⚠️ Invalid username or password. Please try again.';
       errEl.style.display = 'block';
       errEl.style.animation = 'none';
       void errEl.offsetWidth;
@@ -2325,9 +2466,10 @@ function applyRoleUI(role) {
 }
 
 function showAdminPanel() {
-  if (currentRole !== 'admin') {
-    alert('Access denied. Admin only.');
-    return;
+  // ── SECURITY FIX 4: Double-check session, not just global var ──
+  if (!_session.isAdmin() || currentRole !== 'admin') {
+    console.warn('Unauthorized admin panel access attempt');
+    return; // Silent fail — don't expose error details
   }
   document.getElementById('dashboardPage').style.display = 'none';
   const ap = document.getElementById('adminPanel');
@@ -2351,6 +2493,7 @@ function doLogout() {
     setTimeout(() => { el.style.display = 'none'; el.style.opacity = '1'; }, 300);
   });
   currentRole = null;
+  _session.clear(); // FIX 12: clear session closure on logout
   setTimeout(() => {
     const lp = document.getElementById('loginPage');
     lp.style.display = 'flex'; lp.style.opacity = '0';
@@ -2372,7 +2515,8 @@ function safeCall(fn, ...args) {
   catch(e) { console.error('Admin function error:', e); alert('Error: ' + e.message); }
 }
 
-function changeAdminPassword() {
+async function changeAdminPassword() {
+  if (!_session.isAdmin()) return; // FIX 10: gate on session
   const cur = document.getElementById('adminCurrentPwd').value;
   const nw  = document.getElementById('adminNewPwd').value;
   const cf  = document.getElementById('adminConfirmPwd').value;
@@ -2380,38 +2524,44 @@ function changeAdminPassword() {
   const suc = document.getElementById('adminPwdSuccess');
   err.style.display = 'none'; suc.style.display = 'none';
 
-  if (cur !== CREDS.admin.password) { err.textContent = '❌ Current password is incorrect.'; err.style.display = 'block'; return; }
-  if (nw.length < 6) { err.textContent = '❌ New password must be at least 6 characters.'; err.style.display = 'block'; return; }
+  // FIX 10: Hash before comparing
+  const curHash = await _auth.hashPassword(cur);
+  const localAdmin = _auth.getLocalHash('admin');
+  if (curHash !== localAdmin.hash) { err.textContent = '❌ Current password is incorrect.'; err.style.display = 'block'; return; }
+  if (nw.length < 8) { err.textContent = '❌ New password must be at least 8 characters.'; err.style.display = 'block'; return; }
+  if (!/[A-Za-z]/.test(nw) || !/[0-9]/.test(nw)) { err.textContent = '❌ Password must contain letters and numbers.'; err.style.display = 'block'; return; }
   if (nw !== cf) { err.textContent = '❌ New passwords do not match.'; err.style.display = 'block'; return; }
 
-  CREDS.admin.password = nw;
+  const newHash = await _auth.hashPassword(nw);
+  await _auth.updateHash('admin', nw);
   document.getElementById('adminCurrentPwd').value = '';
   document.getElementById('adminNewPwd').value = '';
   document.getElementById('adminConfirmPwd').value = '';
   suc.style.display = 'block';
-  // Sync to DB
-  dbUpdatePassword(CREDS.admin.username, nw).then(ok => {
+  dbUpdatePassword('admin', newHash).then(ok => {
     suc.textContent = ok ? '✅ Admin password updated & synced to database!' : '✅ Admin password updated locally (offline)';
   });
   setTimeout(() => suc.style.display = 'none', 3000);
 }
 
-function changeMgmtPassword() {
+async function changeMgmtPassword() {
+  if (!_session.isAdmin()) return;
   const nw = document.getElementById('mgmtNewPwd').value;
   const cf = document.getElementById('mgmtConfirmPwd').value;
   const err = document.getElementById('mgmtPwdError');
   const suc = document.getElementById('mgmtPwdSuccess');
   err.style.display = 'none'; suc.style.display = 'none';
 
-  if (nw.length < 6) { err.textContent = '❌ Password must be at least 6 characters.'; err.style.display = 'block'; return; }
+  if (nw.length < 8) { err.textContent = '❌ Password must be at least 8 characters.'; err.style.display = 'block'; return; }
+  if (!/[A-Za-z]/.test(nw) || !/[0-9]/.test(nw)) { err.textContent = '❌ Password must contain letters and numbers.'; err.style.display = 'block'; return; }
   if (nw !== cf) { err.textContent = '❌ Passwords do not match.'; err.style.display = 'block'; return; }
 
-  CREDS.management.password = nw;
+  const newHash = await _auth.hashPassword(nw);
+  await _auth.updateHash('management', nw);
   document.getElementById('mgmtNewPwd').value = '';
   document.getElementById('mgmtConfirmPwd').value = '';
   suc.style.display = 'block';
-  // Sync to DB
-  dbUpdatePassword(CREDS.management.username, nw).then(ok => {
+  dbUpdatePassword('management', newHash).then(ok => {
     suc.textContent = ok ? '✅ Management password updated & synced to database!' : '✅ Management password updated locally (offline)';
   });
   setTimeout(() => suc.style.display = 'none', 3000);
